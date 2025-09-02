@@ -243,6 +243,8 @@ function parseResponses(responses){
 
   result = filterResults(result);
 
+  result = applyDoNotSyncRules(result);
+
   result.forEach(function(event){
     if (!event.hasProperty('uid')){
       event.updatePropertyWithValue('uid', Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, event.toString()).toString(), Utilities.Charset.UTF_8);
@@ -589,11 +591,6 @@ function modifyRecurrenceStart(event, referenceDate, filterParameter) {
  * @param {string} calendarTz - The timezone of the target calendar
  */
 function processEvent(event, calendarTz){
-  event = applyDoNotSyncRules(event);
-  if (!event) {
-    return;
-  }
-
   //------------------------ Create the event object ------------------------
   var newEvent = createEvent(event, calendarTz);
   if (newEvent == null)

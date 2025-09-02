@@ -1,88 +1,104 @@
 /**
- * Applies "do not sync" rules to an event.
- * For non-recurring events, it returns null if the event should be skipped.
- * For recurring events, it adds EXDATE properties for occurrences that should be skipped.
+ * Applies "do not sync" rules to an array of events, using the script's local timezone for recurring day rules.
+ * Non-recurring events that match a rule are removed from the array.
+ * Recurring events have EXDATE properties added for occurrences that match a rule.
  *
- * @param {ICAL.Component} event The event to process.
- * @return {ICAL.Component|null} The processed event, or null if it should be skipped.
+ * @param {Array<ICAL.Component>} events The array of events to process.
+ * @return {Array<ICAL.Component>} The processed array of events.
  */
-function applyDoNotSyncRules(event) {
+function applyDoNotSyncRules(events) {
   const config = getDoNotSyncConfig();
-  const icalEvent = new ICAL.Event(event);
+  const processedEvents = [];
+  const scriptTz = Session.getScriptTimeZone();
+  const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
-  if (!icalEvent.startDate || !icalEvent.endDate) {
-    return event;
-  }
+  for (const event of events) {
+    const icalEvent = new ICAL.Event(event);
 
-  // Handle non-recurring events
-  if (!icalEvent.isRecurring()) {
-    const eventStart = icalEvent.startDate.toJSDate();
-    const eventEnd = icalEvent.endDate.toJSDate();
-
-    // Check against specific dates
-    for (const rule of config.specificDates) {
-      const ruleStart = new Date(rule.start);
-      const ruleEnd = new Date(rule.end);
-      if (eventStart.getTime() === ruleStart.getTime() && eventEnd.getTime() === ruleEnd.getTime()) {
-        Logger.log(`Skipping non-recurring event because it matches a specific date rule: ${rule.start} - ${rule.end}`);
-        return null;
-      }
+    if (!icalEvent.startDate || !icalEvent.endDate) {
+      processedEvents.push(event);
+      continue;
     }
 
-    // Check against recurring days
-    const dayOfWeek = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][eventStart.getUTCDay()];
-    for (const rule of config.recurringDays) {
-      if (rule.dayOfWeek === dayOfWeek) {
-        const eventStartTime = eventStart.getUTCHours().toString().padStart(2, '0') + ':' + eventStart.getUTCMinutes().toString().padStart(2, '0') + ':' + eventStart.getUTCSeconds().toString().padStart(2, '0');
-        const eventEndTime = eventEnd.getUTCHours().toString().padStart(2, '0') + ':' + eventEnd.getUTCMinutes().toString().padStart(2, '0') + ':' + eventEnd.getUTCSeconds().toString().padStart(2, '0');
+    if (!icalEvent.isRecurring()) {
+      // Handle non-recurring events
+      const eventStart = icalEvent.startDate.toJSDate();
+      const eventEnd = icalEvent.endDate.toJSDate();
+      let shouldSkip = false;
 
-        if (eventStartTime === rule.startTime && eventEndTime === rule.endTime) {
-          Logger.log(`Skipping non-recurring event because it matches a recurring day rule: ${rule.dayOfWeek} ${rule.startTime} - ${rule.endTime}`);
-          return null;
+      // Check against specific dates (UTC)
+      for (const rule of config.specificDates) {
+        const ruleStart = new Date(rule.start);
+        const ruleEnd = new Date(rule.end);
+        if (eventStart.getTime() === ruleStart.getTime() && eventEnd.getTime() === ruleEnd.getTime()) {
+          shouldSkip = true;
+          Logger.log(`Skipping non-recurring event due to specific date rule: ${rule.start}`);
+          break;
         }
       }
-    }
-    return event;
-  }
 
-  // Handle recurring events
-  const expansion = new ICAL.RecurExpansion({
-    component: event,
-    dtstart: icalEvent.startDate
-  });
+      if (shouldSkip) continue;
 
-  const yearFromNow = new Date();
-  yearFromNow.setFullYear(yearFromNow.getFullYear() + 1);
+      // Check against recurring days (local time)
+      const localDayOfWeek = days[new Date(Utilities.formatDate(eventStart, scriptTz, "yyyy-MM-dd'T'HH:mm:ss")).getDay()];
+      for (const rule of config.recurringDays) {
+        if (rule.dayOfWeek === localDayOfWeek) {
+          const eventStartTime = Utilities.formatDate(eventStart, scriptTz, "HH:mm:ss");
+          const eventEndTime = Utilities.formatDate(eventEnd, scriptTz, "HH:mm:ss");
 
-  let next;
-  while ((next = expansion.next()) && next.toJSDate() < yearFromNow) {
-    const occurrenceStart = next.toJSDate();
-    const occurrenceEnd = new Date(occurrenceStart.getTime() + (icalEvent.endDate.toJSDate() - icalEvent.startDate.toJSDate()));
-
-    // Check against specific dates
-    for (const rule of config.specificDates) {
-      const ruleStart = new Date(rule.start);
-      const ruleEnd = new Date(rule.end);
-      if (occurrenceStart.getTime() === ruleStart.getTime() && occurrenceEnd.getTime() === ruleEnd.getTime()) {
-        Logger.log(`Excluding recurring event instance at ${occurrenceStart} due to specific date rule.`);
-        event.addPropertyWithValue('exdate', next.toString());
-      }
-    }
-
-    // Check against recurring days
-    const dayOfWeek = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][occurrenceStart.getUTCDay()];
-    for (const rule of config.recurringDays) {
-      if (rule.dayOfWeek === dayOfWeek) {
-        const occurrenceStartTime = occurrenceStart.getUTCHours().toString().padStart(2, '0') + ':' + occurrenceStart.getUTCMinutes().toString().padStart(2, '0') + ':' + occurrenceStart.getUTCSeconds().toString().padStart(2, '0');
-        const occurrenceEndTime = occurrenceEnd.getUTCHours().toString().padStart(2, '0') + ':' + occurrenceEnd.getUTCMinutes().toString().padStart(2, '0') + ':' + occurrenceEnd.getUTCSeconds().toString().padStart(2, '0');
-
-        if (occurrenceStartTime === rule.startTime && occurrenceEndTime === rule.endTime) {
-          Logger.log(`Excluding recurring event instance at ${occurrenceStart} due to recurring day rule.`);
-          event.addPropertyWithValue('exdate', next.toString());
+          if (eventStartTime === rule.startTime && eventEndTime === rule.endTime) {
+            shouldSkip = true;
+            Logger.log(`Skipping non-recurring event due to recurring day rule: ${rule.dayOfWeek} ${rule.startTime}`);
+            break;
+          }
         }
       }
+
+      if (!shouldSkip) {
+        processedEvents.push(event);
+      }
+    } else {
+      // Handle recurring events
+      const expansion = new ICAL.RecurExpansion({
+        component: event,
+        dtstart: icalEvent.startDate
+      });
+
+      const yearFromNow = new Date();
+      yearFromNow.setFullYear(yearFromNow.getFullYear() + 1);
+
+      let next;
+      while ((next = expansion.next()) && next.toJSDate() < yearFromNow) {
+        const occurrenceStart = next.toJSDate();
+        const occurrenceEnd = new Date(occurrenceStart.getTime() + (icalEvent.endDate.toJSDate() - icalEvent.startDate.toJSDate()));
+
+        // Check against specific dates (UTC)
+        for (const rule of config.specificDates) {
+          const ruleStart = new Date(rule.start);
+          const ruleEnd = new Date(rule.end);
+          if (occurrenceStart.getTime() === ruleStart.getTime() && occurrenceEnd.getTime() === ruleEnd.getTime()) {
+            Logger.log(`Excluding recurring instance at ${occurrenceStart} due to specific date rule.`);
+            event.addPropertyWithValue('exdate', next.toString());
+          }
+        }
+
+        // Check against recurring days (local time)
+        const localDayOfWeek = days[new Date(Utilities.formatDate(occurrenceStart, scriptTz, "yyyy-MM-dd'T'HH:mm:ss")).getDay()];
+        for (const rule of config.recurringDays) {
+          if (rule.dayOfWeek === localDayOfWeek) {
+            const occurrenceStartTime = Utilities.formatDate(occurrenceStart, scriptTz, "HH:mm:ss");
+            const occurrenceEndTime = Utilities.formatDate(occurrenceEnd, scriptTz, "HH:mm:ss");
+
+            if (occurrenceStartTime === rule.startTime && occurrenceEndTime === rule.endTime) {
+              Logger.log(`Excluding recurring instance at ${occurrenceStart} due to recurring day rule.`);
+              event.addPropertyWithValue('exdate', next.toString());
+            }
+          }
+        }
+      }
+      processedEvents.push(event);
     }
   }
 
-  return event;
+  return processedEvents;
 }
