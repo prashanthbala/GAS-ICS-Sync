@@ -241,9 +241,7 @@ function parseResponses(responses){
     }
   });
 
-  result = filterResults(result);
-
-  result = applyDoNotSyncRules(result);
+  result = applyFilters(result);
 
   result.forEach(function(event){
     if (!event.hasProperty('uid')){
@@ -272,69 +270,6 @@ function parseResponses(responses){
   });
 
   return result;
-}
-
-/**
- * Applies filters to source events based on filters defined in filters.gs
- *
- * @param {Array.ICALComponent} Array with all events from the source calendars
- * @return {Array.ICALComponent} Array with filtered events
- */
-function filterResults(events){
-  Logger.log(`Applying ${filters.length} filters on ${events.length} events.`);
-
-  for (var filter of filters){
-    filter.parameter = filter.parameter.toLowerCase();
-    events = events.filter(function(event){
-      try{
-        if (["dtstart", "dtend"].includes(filter.parameter)){
-          let referenceDate = new ICAL.Time.fromJSDate(new Date(), true).adjust(filter.offset,0,0,0);
-          if (event.hasProperty('rrule') || event.hasProperty('rdate')) {
-            if ((filter.comparison === ">" && filter.type === "exclude")||(filter.comparison === "<" && filter.type === "include")) {
-              event = modifyRecurrenceEnd(event, referenceDate, filter.parameter);
-            } else if ((filter.comparison === "<" && filter.type === "exclude")||(filter.comparison === ">" && filter.type === "include")) {
-              event = modifyRecurrenceStart(event, referenceDate, filter.parameter);
-            }
-            return event !== null;
-          }
-          else{
-            let eventTime = new ICAL.Time.fromString(event.getFirstPropertyValue(filter.parameter).toString(), event.getFirstProperty(filter.parameter));
-            switch (filter.comparison){
-              case ">":
-                return ((eventTime.compare(referenceDate) > 0) ^ (filter.type == "exclude"));
-              case "<":
-                return ((eventTime.compare(referenceDate) < 0) ^ (filter.type == "exclude"));
-              case "default":
-                return true;
-            }
-          }
-        }
-        else{
-          let regexString = `${(["equals", "begins with"].includes(filter.comparison)) ? "^" : ""}(${filter.criterias.join("|")})${(filter.comparison == "equals") ? "$" : ""}`;
-          let regex = new RegExp(regexString);
-          let result = regex.test(event.getFirstPropertyValue(filter.parameter).toString()) ^ (filter.type == "exclude");
-          if (!result && event.hasProperty('recurrence-id')){
-            let id = event.getFirstPropertyValue('uid');
-            Logger.log(`Filtering recurrence instance of ${id} at ${event.getFirstPropertyValue('dtstart').toICALString()}`);
-            let indx = events.findIndex((e) => e.getFirstPropertyValue('uid') == id && !e.hasProperty('recurrence-id'));
-            if (!events[indx].hasProperty('exdate')){
-              events[indx].addProperty(new ICAL.Property('exdate'));
-            }
-            let exdates = events[indx].getFirstProperty('exdate').getValues().concat(event.getFirstPropertyValue('recurrence-id'));
-            events[indx].getFirstProperty('exdate').setValues(exdates);
-          }
-          return result;
-        } 
-      }
-      catch(e){
-        Logger.log(e);
-        return (filter.type == "exclude");
-      }
-    });
-  }
-  
-  Logger.log(`${events.length} events left.`);
-  return events;
 }
 
 /**
